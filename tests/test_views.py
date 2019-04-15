@@ -10,7 +10,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.test.client import RequestFactory
 from django.test.testcases import TestCase
 
@@ -191,7 +191,7 @@ class ConfirmFormViewTest(TestCase):
         self.user = get_user_model().objects.create_user(username="testuser",
                                                          email="test@example.com",
                                                          password="123")
-        self.assertTrue(self.client.login(username="testuser", password="123"))       
+        self.assertTrue(self.client.login(username="testuser", password="123"))
 
     @patch("djstripe.models.Customer.current_subscription", new_callable=PropertyMock, return_value=CurrentSubscription(plan="something-else"))
     @patch("stripe.Customer.create", return_value=PropertyMock(id=fake_stripe_customer_id))
