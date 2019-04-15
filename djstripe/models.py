@@ -169,7 +169,7 @@ class TransferChargeFee(TimeStampedModel):
 
 
 class Customer(StripeCustomer):
-    subscriber = models.OneToOneField(getattr(settings, 'DJSTRIPE_SUBSCRIBER_MODEL', settings.AUTH_USER_MODEL), null=True)
+    subscriber = models.OneToOneField(getattr(settings, 'DJSTRIPE_SUBSCRIBER_MODEL', settings.AUTH_USER_MODEL), on_delete=models.CASCADE, null=True)
     date_purged = models.DateTimeField(null=True, editable=False)
 
     objects = CustomerManager()
@@ -435,6 +435,7 @@ class CurrentSubscription(TimeStampedModel):
 
     customer = models.OneToOneField(
         Customer,
+        on_delete=models.CASCADE,
         related_name="current_subscription",
         null=True
     )
