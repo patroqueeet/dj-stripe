@@ -63,7 +63,7 @@ INSTALL_REQUIRES = [
 ]
 
 setup(
-    name='dj-stripe',
+    name='djstripe',
     version=finder.version,
     description=finder.summary,
     long_description=readme + '\n\n' + history,
