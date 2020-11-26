@@ -19,9 +19,6 @@ from django.utils.encoding import smart_text
 from jsonfield.fields import JSONField
 from model_utils.models import TimeStampedModel
 
-# Much like registering signal handlers. We import this module so that its registrations get picked up
-# the NO QA directive tells flake8 to not complain about the unused import
-from . import event_handlers  # NOQA
 from . import settings as djstripe_settings
 from . import webhooks
 from .exceptions import SubscriptionCancellationFailure, SubscriptionUpdateFailure
