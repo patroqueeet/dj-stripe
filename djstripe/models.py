@@ -4,30 +4,44 @@ from __future__ import unicode_literals
 import datetime
 import decimal
 import json
+import logging
 import traceback as exception_traceback
 import warnings
-import logging
 
+import stripe
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.mail import EmailMessage
 from django.db import models
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.utils.encoding import python_2_unicode_compatible, smart_text
-
+from django.utils.encoding import smart_text
 from jsonfield.fields import JSONField
 from model_utils.models import TimeStampedModel
-import stripe
 
+# Much like registering signal handlers. We import this module so that its registrations get picked up
+# the NO QA directive tells flake8 to not complain about the unused import
+from . import event_handlers  # NOQA
 from . import settings as djstripe_settings
 from . import webhooks
 from .exceptions import SubscriptionCancellationFailure, SubscriptionUpdateFailure
-from .managers import CustomerManager, ChargeManager, TransferManager
-from .signals import WEBHOOK_SIGNALS
-from .signals import subscription_made, cancelled, card_changed
-from .signals import webhook_processing_error
-from .stripe_objects import StripeEvent, StripeTransfer, StripeCustomer, StripeInvoice, StripeCharge, StripePlan, convert_tstamp
+from .managers import ChargeManager, CustomerManager, TransferManager
+from .signals import (
+    WEBHOOK_SIGNALS,
+    cancelled,
+    card_changed,
+    subscription_made,
+    webhook_processing_error,
+)
+from .stripe_objects import (
+    StripeCharge,
+    StripeCustomer,
+    StripeEvent,
+    StripeInvoice,
+    StripePlan,
+    StripeTransfer,
+    convert_tstamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +49,9 @@ stripe.api_key = settings.STRIPE_SECRET_KEY
 stripe.api_version = getattr(settings, "STRIPE_API_VERSION", "2012-11-07")
 
 
-@python_2_unicode_compatible
 class EventProcessingException(TimeStampedModel):
     """Tracks processing exceptions, storing Stack traces for easy reference
-        in the admin interface.
+    in the admin interface.
     """
 
     event = models.ForeignKey("Event", on_delete=models.SET_NULL, null=True)
@@ -48,20 +61,22 @@ class EventProcessingException(TimeStampedModel):
 
     @classmethod
     def log(cls, data, exception, event):
-        """ Creates an instance of this model and saves it to the database.
-            :param data: The `http_body` of a `StripeException`
-            :param exception: An instance of `StripeException`
-            :param event: An instance of `Event`
+        """Creates an instance of this model and saves it to the database.
+        :param data: The `http_body` of a `StripeException`
+        :param exception: An instance of `StripeException`
+        :param event: An instance of `Event`
         """
         cls.objects.create(
             event=event,
             data=data or "",
             message=str(exception),
-            traceback=exception_traceback.format_exc()
+            traceback=exception_traceback.format_exc(),
         )
 
     def __str__(self):
-        return "<{message}, pk={pk}, Event={event}>".format(message=self.message, pk=self.pk, event=self.event)
+        return "<{message}, pk={pk}, Event={event}>".format(
+            message=self.message, pk=self.pk, event=self.event
+        )
 
 
 class Event(StripeEvent):
@@ -77,11 +92,7 @@ class Event(StripeEvent):
     def validate(self):
         event = self.api_retrieve()
         self.validated_message = json.loads(
-            json.dumps(
-                event.to_dict(),
-                sort_keys=True,
-                cls=stripe.StripeObjectEncoder
-            )
+            json.dumps(event.to_dict(), sort_keys=True, cls=stripe.StripeObjectEncoder)
         )
         self.valid = self.webhook_message["data"] == self.validated_message["data"]
         self.save()
@@ -102,7 +113,9 @@ class Event(StripeEvent):
                 # except that some webhook handlers can have side effects outside of our local database, meaning that
                 # even if we rollback on our database, some updates may have been sent to Stripe, etc in resposne to
                 # webhooks...
-                webhooks.call_handlers(self, self.message["data"], event_type, event_subtype)
+                webhooks.call_handlers(
+                    self, self.message["data"], event_type, event_subtype
+                )
                 self.send_signal()
                 self.processed = True
                 self.save()
@@ -110,14 +123,10 @@ class Event(StripeEvent):
                 # TODO: What if we caught all exceptions or a broader range of exceptions here? How about DoesNotExist
                 # exceptions, for instance? or how about TypeErrors, KeyErrors, ValueErrors, etc?
                 EventProcessingException.log(
-                    data=exc.http_body,
-                    exception=exc,
-                    event=self
+                    data=exc.http_body, exception=exc, event=self
                 )
                 webhook_processing_error.send(
-                    sender=Event,
-                    data=exc.http_body,
-                    exception=exc
+                    sender=Event, data=exc.http_body, exception=exc
                 )
 
     def send_signal(self):
@@ -149,7 +158,7 @@ class Transfer(StripeTransfer):
                     amount=fee["amount"] / decimal.Decimal("100"),
                     application=fee.get("application", ""),
                     description=fee.get("description", ""),
-                    kind=fee["type"]
+                    kind=fee["type"],
                 )
         else:
             transfer.status = stripe_object["status"]
@@ -161,7 +170,9 @@ class Transfer(StripeTransfer):
 
 
 class TransferChargeFee(TimeStampedModel):
-    transfer = models.ForeignKey(Transfer, on_delete=models.CASCADE, related_name="charge_fee_details")
+    transfer = models.ForeignKey(
+        Transfer, on_delete=models.CASCADE, related_name="charge_fee_details"
+    )
     amount = models.DecimalField(decimal_places=2, max_digits=7)
     application = models.TextField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
@@ -169,7 +180,11 @@ class TransferChargeFee(TimeStampedModel):
 
 
 class Customer(StripeCustomer):
-    subscriber = models.OneToOneField(getattr(settings, 'DJSTRIPE_SUBSCRIBER_MODEL', settings.AUTH_USER_MODEL), on_delete=models.CASCADE, null=True)
+    subscriber = models.OneToOneField(
+        getattr(settings, "DJSTRIPE_SUBSCRIBER_MODEL", settings.AUTH_USER_MODEL),
+        on_delete=models.CASCADE,
+        null=True,
+    )
     date_purged = models.DateTimeField(null=True, editable=False)
 
     objects = CustomerManager()
@@ -213,29 +228,50 @@ class Customer(StripeCustomer):
         try:
             current_subscription = self.current_subscription
         except CurrentSubscription.DoesNotExist:
-            raise SubscriptionCancellationFailure("Customer does not have current subscription")
+            raise SubscriptionCancellationFailure(
+                "Customer does not have current subscription"
+            )
 
         try:
             """
             If plan has trial days and customer cancels before trial period ends,
             then end subscription now, i.e. at_period_end=False
             """
-            if self.current_subscription.trial_end and self.current_subscription.trial_end > timezone.now():
+            if (
+                self.current_subscription.trial_end
+                and self.current_subscription.trial_end > timezone.now()
+            ):
                 at_period_end = False
-            stripe_subscription = self.stripe_customer.cancel_subscription(at_period_end=at_period_end)
+            stripe_subscription = self.stripe_customer.cancel_subscription(
+                at_period_end=at_period_end
+            )
         except stripe.InvalidRequestError as exc:
-            raise SubscriptionCancellationFailure("Customer's information is not current with Stripe.\n{}".format(str(exc)))
+            raise SubscriptionCancellationFailure(
+                "Customer's information is not current with Stripe.\n{}".format(
+                    str(exc)
+                )
+            )
 
         current_subscription.status = stripe_subscription.status
-        current_subscription.cancel_at_period_end = stripe_subscription.cancel_at_period_end
-        current_subscription.current_period_end = convert_tstamp(stripe_subscription, "current_period_end")
-        current_subscription.canceled_at = convert_tstamp(stripe_subscription, "canceled_at") or timezone.now()
+        current_subscription.cancel_at_period_end = (
+            stripe_subscription.cancel_at_period_end
+        )
+        current_subscription.current_period_end = convert_tstamp(
+            stripe_subscription, "current_period_end"
+        )
+        current_subscription.canceled_at = (
+            convert_tstamp(stripe_subscription, "canceled_at") or timezone.now()
+        )
         current_subscription.save()
         cancelled.send(sender=self, stripe_response=stripe_subscription)
         return current_subscription
 
     def cancel(self, at_period_end=True):
-        warnings.warn("Deprecated - Use ``cancel_subscription`` instead. This method will be removed in dj-stripe 1.0.", DeprecationWarning)
+        warnings.warn(
+            "Deprecated - Use ``cancel_subscription`` instead. This method will be"
+            " removed in dj-stripe 1.0.",
+            DeprecationWarning,
+        )
         return self.cancel_subscription(at_period_end=at_period_end)
 
     @classmethod
@@ -249,13 +285,19 @@ class Customer(StripeCustomer):
     def create(cls, subscriber):
         trial_days = None
         if djstripe_settings.trial_period_for_subscriber_callback:
-            trial_days = djstripe_settings.trial_period_for_subscriber_callback(subscriber)
+            trial_days = djstripe_settings.trial_period_for_subscriber_callback(
+                subscriber
+            )
 
         stripe_customer = cls.api_create(email=subscriber.email)
-        customer = Customer.objects.create(subscriber=subscriber, stripe_id=stripe_customer.id)
+        customer = Customer.objects.create(
+            subscriber=subscriber, stripe_id=stripe_customer.id
+        )
 
         if djstripe_settings.DEFAULT_PLAN and trial_days:
-            customer.subscribe(plan=djstripe_settings.DEFAULT_PLAN, trial_days=trial_days)
+            customer.subscribe(
+                plan=djstripe_settings.DEFAULT_PLAN, trial_days=trial_days
+            )
 
         return customer
 
@@ -308,31 +350,41 @@ class Customer(StripeCustomer):
     # TODO refactor, deprecation on cu parameter -> stripe_customer
     def sync_current_subscription(self, cu=None):
         stripe_customer = cu or self.stripe_customer
-        stripe_subscription = getattr(stripe_customer, 'subscription', None)
-        current_subscription = getattr(self, 'current_subscription', None)
+        stripe_subscription = getattr(stripe_customer, "subscription", None)
+        current_subscription = getattr(self, "current_subscription", None)
 
         if stripe_subscription:
             if current_subscription:
-                logger.debug('Updating subscription')
-                current_subscription.plan = djstripe_settings.plan_from_stripe_id(stripe_subscription.plan.id)
+                logger.debug("Updating subscription")
+                current_subscription.plan = djstripe_settings.plan_from_stripe_id(
+                    stripe_subscription.plan.id
+                )
                 current_subscription.current_period_start = convert_tstamp(
                     stripe_subscription.current_period_start
                 )
                 current_subscription.current_period_end = convert_tstamp(
                     stripe_subscription.current_period_end
                 )
-                current_subscription.amount = (stripe_subscription.plan.amount / decimal.Decimal("100"))
+                current_subscription.amount = (
+                    stripe_subscription.plan.amount / decimal.Decimal("100")
+                )
                 current_subscription.status = stripe_subscription.status
-                current_subscription.cancel_at_period_end = stripe_subscription.cancel_at_period_end
-                current_subscription.canceled_at = convert_tstamp(stripe_subscription, "canceled_at")
+                current_subscription.cancel_at_period_end = (
+                    stripe_subscription.cancel_at_period_end
+                )
+                current_subscription.canceled_at = convert_tstamp(
+                    stripe_subscription, "canceled_at"
+                )
                 current_subscription.start = convert_tstamp(stripe_subscription.start)
                 current_subscription.quantity = stripe_subscription.quantity
                 current_subscription.save()
             else:
-                logger.debug('Creating subscription')
+                logger.debug("Creating subscription")
                 current_subscription = CurrentSubscription.objects.create(
                     customer=self,
-                    plan=djstripe_settings.plan_from_stripe_id(stripe_subscription.plan.id),
+                    plan=djstripe_settings.plan_from_stripe_id(
+                        stripe_subscription.plan.id
+                    ),
                     current_period_start=convert_tstamp(
                         stripe_subscription.current_period_start
                     ),
@@ -344,12 +396,16 @@ class Customer(StripeCustomer):
                     cancel_at_period_end=stripe_subscription.cancel_at_period_end,
                     canceled_at=convert_tstamp(stripe_subscription, "canceled_at"),
                     start=convert_tstamp(stripe_subscription.start),
-                    quantity=stripe_subscription.quantity
+                    quantity=stripe_subscription.quantity,
                 )
 
             if stripe_subscription.trial_start and stripe_subscription.trial_end:
-                current_subscription.trial_start = convert_tstamp(stripe_subscription.trial_start)
-                current_subscription.trial_end = convert_tstamp(stripe_subscription.trial_end)
+                current_subscription.trial_start = convert_tstamp(
+                    stripe_subscription.trial_start
+                )
+                current_subscription.trial_end = convert_tstamp(
+                    stripe_subscription.trial_end
+                )
             else:
                 """
                 Avoids keeping old values for trial_start and trial_end
@@ -362,10 +418,13 @@ class Customer(StripeCustomer):
             current_subscription.save()
 
             return current_subscription
-        elif current_subscription and current_subscription.status != CurrentSubscription.STATUS_CANCELLED:
+        elif (
+            current_subscription
+            and current_subscription.status != CurrentSubscription.STATUS_CANCELLED
+        ):
             # Stripe says customer has no subscription but we think they have one.
             # This could happen if subscription is cancelled from Stripe Dashboard and webhook fails
-            logger.debug('Cancelling subscription for %s' % self)
+            logger.debug("Cancelling subscription for %s" % self)
             current_subscription.status = CurrentSubscription.STATUS_CANCELLED
             current_subscription.save()
             return current_subscription
@@ -374,21 +433,29 @@ class Customer(StripeCustomer):
         stripe_subscription = self.stripe_customer.subscription
         if not stripe_subscription:
             self.sync_current_subscription()
-            raise SubscriptionUpdateFailure("Customer does not have a subscription with Stripe")
+            raise SubscriptionUpdateFailure(
+                "Customer does not have a subscription with Stripe"
+            )
         self.subscribe(
             plan=djstripe_settings.plan_from_stripe_id(stripe_subscription.plan.id),
             quantity=quantity,
-            charge_immediately=charge_immediately
+            charge_immediately=charge_immediately,
         )
 
-    def subscribe(self, plan, quantity=1, trial_days=None,
-                  charge_immediately=True, prorate=djstripe_settings.PRORATION_POLICY):
+    def subscribe(
+        self,
+        plan,
+        quantity=1,
+        trial_days=None,
+        charge_immediately=True,
+        prorate=djstripe_settings.PRORATION_POLICY,
+    ):
         stripe_customer = self.stripe_customer
         """
         Trial_days corresponds to the value specified by the selected plan
         for the key trial_period_days.
         """
-        if ("trial_period_days" in djstripe_settings.PAYMENTS_PLANS[plan]):
+        if "trial_period_days" in djstripe_settings.PAYMENTS_PLANS[plan]:
             trial_days = djstripe_settings.PAYMENTS_PLANS[plan]["trial_period_days"]
 
         if trial_days:
@@ -396,26 +463,30 @@ class Customer(StripeCustomer):
                 plan=djstripe_settings.PAYMENTS_PLANS[plan]["stripe_plan_id"],
                 trial_end=timezone.now() + datetime.timedelta(days=trial_days),
                 prorate=prorate,
-                quantity=quantity
+                quantity=quantity,
             )
         else:
             resp = stripe_customer.update_subscription(
                 plan=djstripe_settings.PAYMENTS_PLANS[plan]["stripe_plan_id"],
                 prorate=prorate,
-                quantity=quantity
+                quantity=quantity,
             )
         self.sync_current_subscription()
         if charge_immediately:
             self.send_invoice()
         subscription_made.send(sender=self, plan=plan, stripe_response=resp)
 
-    def charge(self, amount, currency="usd", description=None, send_receipt=True, **kwargs):
+    def charge(
+        self, amount, currency="usd", description=None, send_receipt=True, **kwargs
+    ):
         """
         This method expects `amount` to be a Decimal type representing a
         dollar amount. It will be converted to cents so any decimals beyond
         two will be ignored.
         """
-        charge_id = super(Customer, self).charge(amount, currency, description, send_receipt, **kwargs)
+        charge_id = super(Customer, self).charge(
+            amount, currency, description, send_receipt, **kwargs
+        )
         recorded_charge = self.record_charge(charge_id)
         if send_receipt:
             recorded_charge.send_receipt()
@@ -437,7 +508,7 @@ class CurrentSubscription(TimeStampedModel):
         Customer,
         on_delete=models.CASCADE,
         related_name="current_subscription",
-        null=True
+        null=True,
     )
     plan = models.CharField(max_length=100)
     quantity = models.IntegerField()
@@ -474,7 +545,11 @@ class CurrentSubscription(TimeStampedModel):
         and therefore has a temporary active subscription until period end.
         """
 
-        return self.canceled_at and self.start < self.canceled_at and self.cancel_at_period_end
+        return (
+            self.canceled_at
+            and self.start < self.canceled_at
+            and self.cancel_at_period_end
+        )
 
     def is_valid(self):
         if not self.is_status_current():
@@ -491,8 +566,7 @@ class CurrentSubscription(TimeStampedModel):
 
         period_end = None
 
-        if self.trial_end is not None and \
-           self.trial_end > timezone.now():
+        if self.trial_end is not None and self.trial_end > timezone.now():
             period_end = self.trial_end
         else:
             period_end = self.current_period_end
@@ -500,8 +574,7 @@ class CurrentSubscription(TimeStampedModel):
         period_end += delta
 
         self.customer.stripe_customer.update_subscription(
-            prorate=False,
-            trial_end=period_end,
+            prorate=False, trial_end=period_end,
         )
 
         self.customer.sync_current_subscription()
@@ -509,7 +582,9 @@ class CurrentSubscription(TimeStampedModel):
 
 class Invoice(StripeInvoice):
 
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name="invoices")
+    customer = models.ForeignKey(
+        Customer, on_delete=models.CASCADE, related_name="invoices"
+    )
 
     class Meta:
         ordering = ["-date"]
@@ -556,11 +631,11 @@ class Invoice(StripeInvoice):
                     plan=plan,
                     period_start=period_start,
                     period_end=period_end,
-                    quantity=item.get("quantity")
-                )
+                    quantity=item.get("quantity"),
+                ),
             )
             if not inv_item_created:
-                inv_item.amount = (item["amount"] / decimal.Decimal("100"))
+                inv_item.amount = item["amount"] / decimal.Decimal("100")
                 inv_item.currency = item["currency"]
                 inv_item.proration = item["proration"]
                 inv_item.description = item.get("description") or ""
@@ -604,7 +679,9 @@ class InvoiceItem(TimeStampedModel):
     quantity = models.IntegerField(null=True)
 
     def __str__(self):
-        return "<amount={amount}, plan={plan}, stripe_id={stripe_id}>".format(amount=self.amount, plan=smart_text(self.plan), stripe_id=self.stripe_id)
+        return "<amount={amount}, plan={plan}, stripe_id={stripe_id}>".format(
+            amount=self.amount, plan=smart_text(self.plan), stripe_id=self.stripe_id
+        )
 
     def plan_display(self):
         return djstripe_settings.PAYMENTS_PLANS[self.plan]["name"]
@@ -613,8 +690,12 @@ class InvoiceItem(TimeStampedModel):
 class Charge(StripeCharge):
     stripe_api_name = "Charge"
 
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name="charges")
-    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE, null=True, related_name="charges")
+    customer = models.ForeignKey(
+        Customer, on_delete=models.CASCADE, related_name="charges"
+    )
+    invoice = models.ForeignKey(
+        Invoice, on_delete=models.CASCADE, null=True, related_name="charges"
+    )
 
     objects = ChargeManager()
 
@@ -652,7 +733,11 @@ class Charge(StripeCharge):
             if invoice:
                 charge.invoice = invoice
         except Invoice.DoesNotExist:
-            logger.warning("No invoice {0} found for charge {1}".format(data.get('invoice'), data.get('id')))
+            logger.warning(
+                "No invoice {0} found for charge {1}".format(
+                    data.get("invoice"), data.get("id")
+                )
+            )
 
         charge.save()
         return charge
@@ -673,16 +758,13 @@ class Charge(StripeCharge):
                 subject,
                 message,
                 to=[self.customer.subscriber.email],
-                from_email=djstripe_settings.INVOICE_FROM_EMAIL
+                from_email=djstripe_settings.INVOICE_FROM_EMAIL,
             ).send()
             self.receipt_sent = num_sent > 0
             self.save()
 
 
-INTERVALS = (
-    ('week', 'Week',),
-    ('month', 'Month',),
-    ('year', 'Year',))
+INTERVALS = (("week", "Week",), ("month", "Month",), ("year", "Year",))
 
 
 class Plan(StripePlan):
@@ -690,21 +772,17 @@ class Plan(StripePlan):
 
     name = models.CharField(max_length=100, null=False)
     currency = models.CharField(
-        choices=djstripe_settings.CURRENCIES,
-        max_length=10,
-        null=False)
+        choices=djstripe_settings.CURRENCIES, max_length=10, null=False
+    )
     interval = models.CharField(
-        max_length=10,
-        choices=INTERVALS,
-        verbose_name="Interval type",
-        null=False)
+        max_length=10, choices=INTERVALS, verbose_name="Interval type", null=False
+    )
     interval_count = models.IntegerField(
-        verbose_name="Intervals between charges",
-        default=1,
-        null=True)
-    amount = models.DecimalField(decimal_places=2, max_digits=7,
-                                 verbose_name="Amount (per period)",
-                                 null=False)
+        verbose_name="Intervals between charges", default=1, null=True
+    )
+    amount = models.DecimalField(
+        decimal_places=2, max_digits=7, verbose_name="Amount (per period)", null=False
+    )
     trial_period_days = models.IntegerField(null=True)
 
     def str_parts(self):
@@ -715,14 +793,14 @@ class Plan(StripePlan):
 
         # A few minor things are changed in the api-version of the create call
         api_kwargs = dict(kwargs)
-        api_kwargs['id'] = api_kwargs['stripe_id']
-        del(api_kwargs['stripe_id'])
-        api_kwargs['amount'] = int(api_kwargs['amount'] * 100)
+        api_kwargs["id"] = api_kwargs["stripe_id"]
+        del api_kwargs["stripe_id"]
+        api_kwargs["amount"] = int(api_kwargs["amount"] * 100)
         cls.api_create(**api_kwargs)
 
         # If they passed in a 'metadata' arg, drop that here as it is only for api consumption
-        if 'metadata' in kwargs:
-            del(kwargs['metadata'])
+        if "metadata" in kwargs:
+            del kwargs["metadata"]
         plan = Plan.objects.create(**kwargs)
 
         return plan
@@ -730,7 +808,7 @@ class Plan(StripePlan):
     @classmethod
     def get_or_create(cls, **kwargs):
         try:
-            return Plan.objects.get(stripe_id=kwargs['stripe_id']), False
+            return Plan.objects.get(stripe_id=kwargs["stripe_id"]), False
         except Plan.DoesNotExist:
             return cls.create(**kwargs), True
 
@@ -749,7 +827,3 @@ class Plan(StripePlan):
         p.save()
 
         self.save()
-
-# Much like registering signal handlers. We import this module so that its registrations get picked up
-# the NO QA directive tells flake8 to not complain about the unused import
-from . import event_handlers  # NOQA
