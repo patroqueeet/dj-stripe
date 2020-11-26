@@ -16,21 +16,19 @@ This module defines abstract models which are then extended in models.py to prov
 dj-stripe functionality.
 """
 
-from contextlib import contextmanager
 import datetime
 import decimal
+from contextlib import contextmanager
 
+import stripe
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
-from django.utils.encoding import python_2_unicode_compatible, smart_text
+from django.utils.encoding import smart_text
 from jsonfield import JSONField
-
 from model_utils.models import TimeStampedModel
-import stripe
 
-from .managers import TransferManager, StripeObjectManager
-
+from .managers import StripeObjectManager, TransferManager
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 stripe.api_version = getattr(settings, "STRIPE_API_VERSION", "2012-11-07")
@@ -45,6 +43,7 @@ def stripe_temporary_api_key(temp_key):
     the original value is restored as soon as context exits
     """
     import stripe
+
     backup_key = stripe.api_key
     stripe.api_key = temp_key
     yield
@@ -62,7 +61,6 @@ def convert_tstamp(response, field_name=None):
             return datetime.datetime.fromtimestamp(response[field_name], tz)
 
 
-@python_2_unicode_compatible
 class StripeObject(TimeStampedModel):
     # This must be defined in descendants of this model/mixin
     # e.g. "Event", "Charge", "Customer", etc.
@@ -83,8 +81,10 @@ class StripeObject(TimeStampedModel):
         stripe_api_name attribute to be set on model).
         """
         if cls.stripe_api_name is None:
-            raise NotImplementedError("StripeObject descendants are required to define "
-                                      "the stripe_api_name attribute")
+            raise NotImplementedError(
+                "StripeObject descendants are required to define "
+                "the stripe_api_name attribute"
+            )
         # e.g. stripe.Event, stripe.Charge, etc
         return getattr(stripe, cls.stripe_api_name)
 
@@ -156,10 +156,10 @@ class StripeEvent(StripeObject):
     @classmethod
     def stripe_object_to_record(cls, data):
         return {
-            'stripe_id': data["id"],
-            'kind': data["type"],
-            'livemode': data["livemode"],
-            'webhook_message': data,
+            "stripe_id": data["id"],
+            "kind": data["type"],
+            "livemode": data["livemode"],
+            "webhook_message": data,
         }
 
     def str_parts(self):
@@ -172,26 +172,46 @@ class StripeTransfer(StripeObject):
 
     stripe_api_name = "Transfer"
 
-    amount = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    amount = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
     status = models.CharField(max_length=25)
     date = models.DateTimeField()
     description = models.TextField(null=True, blank=True)
 
     # The following fields are nested in the "summary" object
     adjustment_count = models.IntegerField()
-    adjustment_fees = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
-    adjustment_gross = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    adjustment_fees = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
+    adjustment_gross = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
     charge_count = models.IntegerField()
-    charge_fees = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
-    charge_gross = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    charge_fees = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
+    charge_gross = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
     collected_fee_count = models.IntegerField()
-    collected_fee_gross = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
-    net = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    collected_fee_gross = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
+    net = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
     refund_count = models.IntegerField()
-    refund_fees = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
-    refund_gross = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    refund_fees = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
+    refund_gross = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
     validation_count = models.IntegerField()
-    validation_fees = models.DecimalField(decimal_places=2, max_digits=7)  # Stripe = cents, djstripe = dollars
+    validation_fees = models.DecimalField(
+        decimal_places=2, max_digits=7
+    )  # Stripe = cents, djstripe = dollars
 
     objects = TransferManager()
 
@@ -208,7 +228,7 @@ class StripeTransfer(StripeObject):
     @classmethod
     def stripe_object_to_record(cls, data):
         result = {
-            'stripe_id': data["id"],
+            "stripe_id": data["id"],
             "amount": data["amount"] / decimal.Decimal("100"),
             "status": data["status"],
             "date": convert_tstamp(data, "date"),
@@ -276,26 +296,26 @@ class StripeCustomer(StripeObject):
     # TODO refactor, deprecation on cu parameter -> stripe_customer
     def sync(self, cu=None):
         stripe_customer = cu or self.stripe_customer
-        if getattr(stripe_customer, 'deleted', False):
+        if getattr(stripe_customer, "deleted", False):
             # Customer was deleted from stripe
             self.purge()
-        elif getattr(stripe_customer, 'active_card', None):
+        elif getattr(stripe_customer, "active_card", None):
             self.card_fingerprint = stripe_customer.active_card.fingerprint
             self.card_last_4 = stripe_customer.active_card.last4
             self.card_kind = stripe_customer.active_card.type
             self.card_exp_month = stripe_customer.active_card.exp_month
             self.card_exp_year = stripe_customer.active_card.exp_year
 
-    def charge(self, amount, currency="usd", description=None, send_receipt=True, **kwargs):
+    def charge(
+        self, amount, currency="usd", description=None, send_receipt=True, **kwargs
+    ):
         """
         This method expects `amount` to be a Decimal type representing a
         dollar amount. It will be converted to cents so any decimals beyond
         two will be ignored.
         """
         if not isinstance(amount, decimal.Decimal):
-            raise ValueError(
-                "You must supply a decimal value representing dollars."
-            )
+            raise ValueError("You must supply a decimal value representing dollars.")
         resp = StripeCharge.api_create(
             amount=int(amount * 100),  # Convert dollars into cents
             currency=currency,
@@ -305,7 +325,9 @@ class StripeCustomer(StripeObject):
         )
         return resp["id"]
 
-    def add_invoice_item(self, amount, currency="usd", invoice_id=None, description=None):
+    def add_invoice_item(
+        self, amount, currency="usd", invoice_id=None, description=None
+    ):
         """
         Adds an arbitrary charge or credit to the customer's upcoming invoice.
         Different than creating a charge. Charges are separate bills that get
@@ -328,9 +350,7 @@ class StripeCustomer(StripeObject):
         """
 
         if not isinstance(amount, decimal.Decimal):
-            raise ValueError(
-                "You must supply a decimal value representing dollars."
-            )
+            raise ValueError("You must supply a decimal value representing dollars.")
         stripe.InvoiceItem.create(
             amount=int(amount * 100),  # Convert dollars into cents
             currency=currency,
@@ -445,8 +465,7 @@ class StripeCharge(StripeObject):
         :rtype: dict
         """
         charge_obj = self.api_retrieve().refund(
-            amount=self.calculate_refund_amount(amount=amount),
-            **kwargs
+            amount=self.calculate_refund_amount(amount=amount), **kwargs
         )
         return charge_obj
 
@@ -498,9 +517,9 @@ class StripeCharge(StripeObject):
         if data.get("description"):
             result["description"] = data["description"]
         if data.get("amount_refunded"):
-            result["amount_refunded"] = (data["amount_refunded"] / decimal.Decimal("100"))
+            result["amount_refunded"] = data["amount_refunded"] / decimal.Decimal("100")
         if data["refunded"]:
-            result["amount_refunded"] = (data["amount"] / decimal.Decimal("100"))
+            result["amount_refunded"] = data["amount"] / decimal.Decimal("100")
 
         return result
 
@@ -509,10 +528,7 @@ class StripeCharge(StripeObject):
             setattr(self, attr, value)
 
 
-INTERVALS = (
-    ('week', 'Week',),
-    ('month', 'Month',),
-    ('year', 'Year',))
+INTERVALS = (("week", "Week",), ("month", "Month",), ("year", "Year",))
 
 
 class StripePlan(StripeObject):
