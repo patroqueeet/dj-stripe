@@ -366,7 +366,7 @@ class StripeInvoice(StripeObject):
 
     stripe_api_name = "Invoice"
 
-    attempted = models.NullBooleanField()
+    attempted = models.BooleanField(null=True)
     attempts = models.PositiveIntegerField(null=True)
     closed = models.BooleanField(default=False)
     paid = models.BooleanField(default=False)
@@ -432,10 +432,10 @@ class StripeCharge(StripeObject):
     amount = models.DecimalField(decimal_places=2, max_digits=7, null=True)
     amount_refunded = models.DecimalField(decimal_places=2, max_digits=7, null=True)
     description = models.TextField(blank=True)
-    paid = models.NullBooleanField(null=True)
-    disputed = models.NullBooleanField(null=True)
-    refunded = models.NullBooleanField(null=True)
-    captured = models.NullBooleanField(null=True)
+    paid = models.BooleanField(null=True)
+    disputed = models.BooleanField(null=True)
+    refunded = models.BooleanField(null=True)
+    captured = models.BooleanField(null=True)
     fee = models.DecimalField(decimal_places=2, max_digits=7, null=True)
     receipt_sent = models.BooleanField(default=False)
     charge_created = models.DateTimeField(null=True, blank=True)

@@ -79,7 +79,7 @@ class EventProcessingException(TimeStampedModel):
 class Event(StripeEvent):
     customer = models.ForeignKey("Customer", on_delete=models.CASCADE, null=True)
     validated_message = JSONField(null=True)
-    valid = models.NullBooleanField(null=True)
+    valid = models.BooleanField(null=True)
     processed = models.BooleanField(default=False)
 
     @property
