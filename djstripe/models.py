@@ -12,7 +12,7 @@ import stripe
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.mail import EmailMessage
-from django.db import models
+from django.db import models, transaction
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.utils.encoding import smart_text
@@ -290,6 +290,10 @@ class Customer(StripeCustomer):
         customer = Customer.objects.create(
             subscriber=subscriber, stripe_id=stripe_customer.id
         )
+
+        # force commit, because we need customer obj in db before considering default
+        # plan
+        transaction.commit()
 
         if djstripe_settings.DEFAULT_PLAN and trial_days:
             customer.subscribe(
